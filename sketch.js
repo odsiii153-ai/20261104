@@ -4,21 +4,31 @@ let runSprite; // 儲存跑步動畫的精靈圖。
 let runLeftSprite; // 儲存左向跑步動畫的精靈圖。
 let runRightSprite; // 儲存右向跑步動畫的精靈圖。
 let jumpSprite; // 儲存跳躍動畫的精靈圖。
+let attackSprite; // 儲存攻擊動畫的精靈圖。
 let trees = []; // 儲存森林中固定位置的樹木資料。
 let fireflies = []; // 儲存背景螢火蟲的動畫資料。
+let attackProjectiles = []; // 儲存攻擊動畫中依序發射的魔法光彈。
+let firedAttackFrames = new Set(); // 記錄本次攻擊已觸發的投射物影格。
 let characterX; // 儲存角色目前的水平位置。
 let facing = 1; // 設定角色初始朝向右方。
 let isJumping = false; // 記錄跳躍動畫是否正在播放。
 let jumpStartedAt = 0; // 記錄本次跳躍動畫的開始時間。
 let upKeyHeld = false; // 記錄上方向鍵是否尚未放開。
+let isAttacking = false; // 記錄攻擊動畫是否正在播放。
+let attackStartedAt = 0; // 記錄本次攻擊動畫的開始時間。
+let spaceKeyHeld = false; // 記錄空白鍵是否尚未放開。
 const characterHeight = 190; // 設定角色在畫面上的顯示高度。
 const jumpFrameDuration = 90; // 設定跳躍動畫每格影格的播放時間。
+const attackFrameDuration = 65; // 設定攻擊動畫每格影格的播放時間。
+const attackProjectileFrames = [4, 6, 8, 12]; // 設定第5、7、9、13格觸發投射物。
+const attackProjectileDuration = 1050; // 設定每顆投射物飛行與淡出的時間。
 const spriteSheets = { // 定義各精靈圖的每格數量與原始尺寸。
   stop: { frames: 16, width: 779, height: 95 }, // 設定站立動畫的精靈圖規格。
   walk: { frames: 10, width: 545, height: 92 }, // 設定行走動畫的精靈圖規格。
   runLeft: { frames: 4, width: 271, height: 86 }, // 設定左向跑步動畫的精靈圖規格。
   runRight: { frames: 8, width: 595, height: 91 }, // 設定右向跑步動畫的精靈圖規格。
-  jump: { frames: 9, width: 580, height: 98 } // 設定跳躍動畫的精靈圖規格。
+  jump: { frames: 9, width: 580, height: 98 }, // 設定跳躍動畫的精靈圖規格。
+  attack: { frames: 14, width: 1157, height: 94 } // 設定攻擊動畫的精靈圖規格。
 }; // 結束精靈圖規格設定。
 
 function preload() { // 在畫布開始繪製前載入角色精靈圖。
@@ -27,6 +37,7 @@ function preload() { // 在畫布開始繪製前載入角色精靈圖。
   runLeftSprite = loadImage('1/run/run_左.png'); // 載入左向跑步精靈圖。
   runRightSprite = loadImage('1/run/run_右.png'); // 載入右向跑步精靈圖。
   jumpSprite = loadImage('1/jump/jump.png'); // 載入跳躍精靈圖。
+  attackSprite = loadImage('1/forwork/forwork.png'); // 載入攻擊精靈圖。
 } // 結束載入函式。
 
 function setup() { // 初始化全螢幕畫布與場景資料。
@@ -40,6 +51,8 @@ function draw() { // 每個動畫影格重繪森林與角色。
   drawForest(); // 繪製會動態變化的精靈森林背景。
   updateCharacter(); // 讀取方向鍵並更新角色位置與朝向。
   drawCharacter(); // 依照目前狀態繪製角色動畫影格。
+  drawAttackProjectiles(); // 更新並繪製攻擊時發射的魔法光彈。
+  drawInstructionsFooter(); // 在畫布底部繪製操作說明頁尾。
 } // 結束每影格繪製函式。
 
 function createForest() { // 依畫面尺寸建立背景物件。
@@ -131,7 +144,7 @@ function updateCharacter() { // 依照鍵盤方向計算角色動作與位移。
     facing = direction; // 使角色面向目前移動方向。
     characterX += direction * (running ? 300 : 165) * deltaTime / 1000; // 依照走路或跑步速度更新位置。
   } // 結束角色移動判斷。
-  const currentSheet = isJumping ? spriteSheets.jump : running ? movingLeft ? spriteSheets.runLeft : spriteSheets.runRight : movingLeft || movingRight ? spriteSheets.walk : spriteSheets.stop; // 選擇目前動畫的影格規格。
+  const currentSheet = isAttacking ? spriteSheets.attack : isJumping ? spriteSheets.jump : running ? movingLeft ? spriteSheets.runLeft : spriteSheets.runRight : movingLeft || movingRight ? spriteSheets.walk : spriteSheets.stop; // 選擇目前動畫的影格規格。
   const frameWidth = currentSheet.width / currentSheet.frames; // 計算精靈圖中單格影格的原始寬度。
   const displayWidth = frameWidth * characterHeight / currentSheet.height; // 依照固定顯示高度計算角色寬度。
   characterX = constrain(characterX, displayWidth / 2, width - displayWidth / 2); // 避免角色移動出畫面左右邊界。
@@ -147,36 +160,151 @@ function drawCharacter() { // 繪製目前動作狀態中的角色動畫。
   if (isJumping && !jumpPlaying) { // 在跳躍動畫播完後結束跳躍狀態。
     isJumping = false; // 讓角色恢復一般動作動畫。
   } // 結束跳躍動畫完成處理。
+  const attackElapsed = millis() - attackStartedAt; // 計算本次攻擊動畫已播放的時間。
+  const attackPlaying = isAttacking && attackElapsed < spriteSheets.attack.frames * attackFrameDuration; // 確認攻擊動畫是否尚未完整播放一輪。
+  if (isAttacking && !attackPlaying) { // 在攻擊動畫播完後結束攻擊狀態。
+    isAttacking = false; // 讓角色恢復一般動作動畫。
+  } // 結束攻擊動畫完成處理。
   const jumpProgress = jumpPlaying ? constrain(jumpElapsed / (spriteSheets.jump.frames * jumpFrameDuration), 0, 1) : 0; // 計算跳躍動畫目前完成的比例。
   const jumpArc = sin(PI * jumpProgress); // 使用弧線讓角色平順地上升並落回地面。
   const jumpOffset = jumpArc * characterHeight * 0.9; // 依弧線計算角色向上的跳躍高度。
-  const currentSprite = jumpPlaying ? jumpSprite : running ? movingLeft ? runLeftSprite : runRightSprite : moving ? walkSprite : stopSprite; // 優先選擇跳躍精靈圖，否則選擇一般動作圖。
-  const currentSheet = jumpPlaying ? spriteSheets.jump : running ? movingLeft ? spriteSheets.runLeft : spriteSheets.runRight : moving ? spriteSheets.walk : spriteSheets.stop; // 取得目前精靈圖的影格規格。
+  const attackProgress = attackPlaying ? constrain(attackElapsed / (spriteSheets.attack.frames * attackFrameDuration), 0, 1) : 0; // 計算攻擊動畫目前完成的比例。
+  const currentSprite = attackPlaying ? attackSprite : jumpPlaying ? jumpSprite : running ? movingLeft ? runLeftSprite : runRightSprite : moving ? walkSprite : stopSprite; // 優先選擇攻擊或跳躍精靈圖，否則選擇一般動作圖。
+  const currentSheet = attackPlaying ? spriteSheets.attack : jumpPlaying ? spriteSheets.jump : running ? movingLeft ? spriteSheets.runLeft : spriteSheets.runRight : moving ? spriteSheets.walk : spriteSheets.stop; // 取得目前精靈圖的影格規格。
   const frameWidth = currentSheet.width / currentSheet.frames; // 計算精靈圖每格的原始寬度。
-  const frameIndex = jumpPlaying ? floor(jumpElapsed / jumpFrameDuration) : floor(millis() / (running ? 65 : 90)) % currentSheet.frames; // 跳躍播放單輪影格，其餘動作則循環播放。
+  const frameIndex = attackPlaying ? floor(attackElapsed / attackFrameDuration) : jumpPlaying ? floor(jumpElapsed / jumpFrameDuration) : floor(millis() / (running ? 65 : 90)) % currentSheet.frames; // 攻擊與跳躍播放單輪影格，其餘動作則循環播放。
   const frameHeight = currentSheet.height; // 取得目前影格的原始高度。
   const displayWidth = frameWidth * characterHeight / frameHeight; // 按照原始比例計算角色顯示寬度。
+  if (attackPlaying && attackProjectileFrames.includes(frameIndex) && !firedAttackFrames.has(frameIndex)) { // 在指定攻擊影格各觸發一次投射物。
+    spawnAttackProjectile(frameIndex, displayWidth, jumpOffset); // 從角色面前建立目前攻擊影格的魔法光彈。
+    firedAttackFrames.add(frameIndex); // 記錄已發射的影格，避免同一格重複發射。
+  } // 結束指定影格投射物觸發。
   if (jumpPlaying) { // 角色跳躍時在地面繪製跟隨高度變化的影子。
     noStroke(); // 關閉影子的外框。
     fill(0, 0, 0, 70 - jumpArc * 40); // 角色越高時讓地面影子越淡。
     ellipse(characterX, height * 0.68 + characterHeight * 0.48, displayWidth * (0.62 - jumpArc * 0.2), characterHeight * 0.1); // 隨角色高度縮小地面影子以強化騰空感。
   } // 結束地面影子繪製。
+  if (attackPlaying) { // 攻擊動畫期間繪製閃光特效。
+    drawAttackFlash(characterX, height * 0.68 - jumpOffset, displayWidth, attackProgress); // 在角色周圍繪製隨攻擊進度變化的光芒與火花。
+  } // 結束攻擊閃光繪製。
   push(); // 儲存繪圖狀態以隔離角色的方向翻轉。
   translate(characterX, height * 0.68 - jumpOffset); // 依跳躍弧線將角色由地面向上移動再落回原位。
-  scale(running ? 1 : facing, 1); // 只翻轉站立與行走精靈圖，跑步圖已按方向分開繪製。
+  scale(running && !attackPlaying ? 1 : facing, 1); // 只翻轉站立、行走與攻擊精靈圖，跑步圖已按方向分開繪製。
   image(currentSprite, -displayWidth / 2, -characterHeight / 2, displayWidth, characterHeight, frameIndex * frameWidth, 0, frameWidth, frameHeight); // 從精靈圖裁切目前影格並繪製角色。
   pop(); // 還原繪圖狀態以免影響後續圖形。
 } // 結束角色繪製函式。
 
+function spawnAttackProjectile(frameIndex, displayWidth, jumpOffset) { // 從角色面前建立一顆具備獨立飛行狀態的魔法光彈。
+ const ordinal = attackProjectileFrames.indexOf(frameIndex); // 取得本次投射物在連續攻擊中的順序。
+ const originX = characterX + facing * displayWidth * 0.28; // 將光彈起點放在角色面向的一側。
+ const originY = height * 0.68 - jumpOffset - characterHeight * 0.08 + (ordinal - 1.5) * 9; // 依攻擊順序稍微錯開光彈高度。
+ attackProjectiles.push({ x: originX, y: originY, direction: facing, startedAt: millis(), phase: ordinal * 1.7 }); // 儲存光彈起點、方向、開始時間與閃爍相位。
+} // 結束魔法光彈建立函式。
+
+function drawAttackProjectiles() { // 更新光彈飛行位置並繪製發光軌跡。
+ const now = millis(); // 取得目前時間以計算光彈飛行進度。
+ attackProjectiles = attackProjectiles.filter((projectile) => now - projectile.startedAt < attackProjectileDuration && projectile.x > -80 && projectile.x < width + 80); // 移除飛行時間結束或已離開畫面的光彈。
+ for (const projectile of attackProjectiles) { // 逐一更新並繪製仍在飛行的光彈。
+   const elapsed = now - projectile.startedAt; // 計算目前光彈已飛行的時間。
+   const progress = constrain(elapsed / attackProjectileDuration, 0, 1); // 將飛行時間轉換為0至1之間的進度。
+   const travel = elapsed * 0.58; // 依照飛行時間計算光彈水平前進距離。
+   const x = projectile.x + projectile.direction * travel; // 計算光彈目前的水平座標。
+   const y = projectile.y - progress * 56 + sin(elapsed * 0.012 + projectile.phase) * 5; // 讓光彈前進時微微上升並閃動。
+   const radius = 8 + sin(elapsed * 0.025 + projectile.phase) * 2; // 計算光彈閃爍時的大小。
+   const alpha = 255 * (1 - progress * 0.82); // 讓光彈逐漸飛遠並淡出。
+   push(); // 儲存繪圖狀態以隔離光彈特效的旋轉與透明度。
+   noStroke(); // 關閉光彈與光暈外框。
+   fill(255, 190, 65, alpha * 0.22); // 設定光彈外層橘金色光暈。
+   ellipse(x, y, radius * 5, radius * 5); // 繪製柔和的外層光暈。
+   fill(255, 222, 113, alpha * 0.75); // 設定光彈中層金色亮光。
+   ellipse(x, y, radius * 2.2, radius * 2.2); // 繪製光彈明亮核心外圈。
+   fill(255, 255, 226, alpha); // 設定光彈中心的白黃色。
+   ellipse(x, y, radius, radius); // 繪製光彈發亮核心。
+   fill(255, 225, 125, alpha * 0.72); // 設定光彈後方的光尾顏色。
+   triangle(x - projectile.direction * radius * 0.6, y - radius * 0.45, x - projectile.direction * radius * (2.1 + progress), y, x - projectile.direction * radius * 0.6, y + radius * 0.45); // 繪製朝角色反方向延伸的光尾。
+   translate(x, y); // 將座標原點移至光彈中心。
+   rotate(elapsed * 0.008 + projectile.phase); // 讓光彈周圍的星芒持續旋轉。
+   fill(255, 250, 192, alpha); // 設定星芒的淡黃色。
+   beginShape(); // 開始繪製四角星芒。
+   vertex(0, -radius * 1.8); // 標記星芒上方的尖角。
+   vertex(radius * 0.45, 0); // 標記星芒右側內凹點。
+   vertex(0, radius * 1.8); // 標記星芒下方的尖角。
+   vertex(-radius * 0.45, 0); // 標記星芒左側內凹點。
+   endShape(CLOSE); // 封閉並繪製四角星芒。
+   pop(); // 還原繪圖狀態以免影響其他畫面元素。
+ } // 結束所有飛行光彈繪製。
+} // 結束魔法光彈更新與繪製函式。
+
+function drawAttackFlash(x, y, characterWidth, progress) { // 繪製攻擊期間的金色光芒與放射火花。
+  const pulse = sin(progress * PI); // 計算隨攻擊開始與結束淡入淡出的閃光強度。
+  const radius = characterWidth * (0.38 + pulse * 0.2); // 依照攻擊進度計算光圈大小。
+  push(); // 儲存繪圖狀態以隔離特效的透明度與線條設定。
+  noStroke(); // 關閉光圈與火花外框。
+  fill(255, 215, 83, 22 + pulse * 65); // 設定柔和的金色光暈。
+  ellipse(x + facing * characterWidth * 0.18, y, radius * 2.2, radius * 1.5); // 在角色朝向一側繪製攻擊光暈。
+  fill(255, 245, 180, 35 + pulse * 105); // 設定較亮的內層閃光。
+  ellipse(x + facing * characterWidth * 0.28, y, radius * 1.1, radius * 0.8); // 繪製集中在攻擊方向的亮光。
+  stroke(255, 231, 139, 75 + pulse * 170); // 設定放射火花的金色線條。
+  strokeWeight(2); // 設定火花線條粗細。
+  for (let spark = 0; spark < 7; spark += 1) { // 逐一繪製環繞角色的放射火花。
+    const angle = -PI * 0.8 + spark * PI * 0.24; // 計算每道火花的放射角度。
+    const drift = sin(frameCount * 0.22 + spark * 1.7) * 7; // 加入細微擺動讓火花呈現閃爍感。
+    const startX = x + facing * characterWidth * 0.2 + cos(angle) * radius * 0.55; // 計算火花線段起點的水平位置。
+    const startY = y + sin(angle) * radius * 0.42; // 計算火花線段起點的垂直位置。
+    const endX = startX + cos(angle) * (18 + pulse * 14) + facing * drift; // 計算火花線段終點的水平位置。
+    const endY = startY + sin(angle) * (18 + pulse * 14) + drift; // 計算火花線段終點的垂直位置。
+    line(startX, startY, endX, endY); // 繪製目前的放射火花。
+    noStroke(); // 取消外框以繪製火花亮點。
+    fill(255, 250, 203, 90 + pulse * 165); // 設定火花亮點的淡黃色。
+    ellipse(endX, endY, 3 + pulse * 3, 3 + pulse * 3); // 在火花末端繪製閃亮光點。
+    stroke(255, 231, 139, 75 + pulse * 170); // 恢復火花線條顏色以繪製下一道光芒。
+  } // 結束放射火花繪製。
+  pop(); // 還原繪圖狀態以免特效影響頁尾或背景。
+} // 結束攻擊閃光特效函式。
+
+function drawInstructionsFooter() { // 在畫布底部繪製適應螢幕寬度的遊戲操作說明。
+  const compact = width < 640; // 判斷是否使用窄螢幕雙列排版。
+  const footerHeight = compact ? 78 : 56; // 依排版模式決定頁尾高度。
+  const instructions = ['← →：走路', '空白鍵 + ← →：跑步', '↑：向上跳', '空白鍵：攻擊']; // 建立四項遊戲操作文字。
+  noStroke(); // 關閉頁尾底色的外框。
+  fill(8, 17, 26, 220); // 設定半透明深色頁尾背景。
+  rect(0, height - footerHeight, width, footerHeight); // 在畫布最下方繪製頁尾背景。
+  stroke(143, 191, 157, 125); // 設定頁尾上緣的柔和綠色分隔線。
+  strokeWeight(1); // 設定頁尾分隔線粗細。
+  line(0, height - footerHeight, width, height - footerHeight); // 繪製頁尾上緣分隔線。
+  noStroke(); // 關閉操作說明文字外框。
+  fill(240, 246, 224); // 設定操作說明文字顏色。
+  textAlign(CENTER, CENTER); // 將說明文字置中對齊。
+  textSize(compact ? 14 : 16); // 依螢幕寬度設定清晰易讀的文字大小。
+  for (let index = 0; index < instructions.length; index += 1) { // 逐項繪製遊戲操作說明。
+    const column = compact ? index % 2 : index; // 窄螢幕採兩欄，寬螢幕採四欄。
+    const row = compact ? floor(index / 2) : 0; // 窄螢幕將說明分成兩列。
+    const columnCount = compact ? 2 : 4; // 依版面設定每列欄數。
+    const x = (column + 0.5) * width / columnCount; // 計算目前說明欄位的水平中心。
+    const y = height - footerHeight + (compact ? 22 + row * 34 : footerHeight / 2); // 計算目前說明列的垂直中心。
+    text(instructions[index], x, y); // 在頁尾繪製目前操作說明。
+  } // 結束操作說明繪製。
+} // 結束遊戲操作頁尾函式。
+
 function keyPressed() { // 在上方向鍵按下時啟動單次跳躍動畫。
   if (keyCode === UP_ARROW && !upKeyHeld) { // 只處理上方向鍵的新按下事件。
     upKeyHeld = true; // 標記上方向鍵已按住，避免長按重複觸發。
-    if (!isJumping) { // 只有角色不在跳躍時才開始新的一輪動畫。
+    if (!isJumping && !isAttacking) { // 只有角色未跳躍或攻擊時才開始跳躍動畫。
       isJumping = true; // 啟動跳躍動畫。
       jumpStartedAt = millis(); // 記錄跳躍動畫開始時間。
     } // 結束跳躍啟動判斷。
     return false; // 阻止上方向鍵造成頁面捲動。
   } // 結束上方向鍵處理。
+  if (keyCode === 32 && !spaceKeyHeld) { // 只處理空白鍵的新按下事件。
+    spaceKeyHeld = true; // 標記空白鍵已按住，避免長按重複觸發攻擊。
+    const moving = keyIsDown(LEFT_ARROW) || keyIsDown(RIGHT_ARROW); // 檢查是否同時按住方向鍵以區分跑步。
+    if (!moving && !isJumping && !isAttacking) { // 只有單獨按空白鍵且角色沒有其他特殊動作時才攻擊。
+      isAttacking = true; // 啟動單次攻擊動畫。
+      attackStartedAt = millis(); // 記錄攻擊動畫開始時間。
+      firedAttackFrames.clear(); // 清除前一次攻擊的影格紀錄。
+    } // 結束攻擊啟動判斷。
+    return false; // 阻止空白鍵造成頁面捲動。
+  } // 結束空白鍵處理。
 } // 結束鍵盤按下處理函式。
 
 function keyReleased() { // 在上方向鍵放開時允許下次跳躍。
@@ -184,6 +312,10 @@ function keyReleased() { // 在上方向鍵放開時允許下次跳躍。
     upKeyHeld = false; // 清除按鍵狀態以允許下一次按下觸發跳躍。
     return false; // 阻止上方向鍵放開事件造成頁面捲動。
   } // 結束上方向鍵放開處理。
+  if (keyCode === 32) { // 確認放開的是空白鍵。
+    spaceKeyHeld = false; // 清除空白鍵狀態以允許下一次按下觸發攻擊。
+    return false; // 阻止空白鍵放開事件造成頁面捲動。
+  } // 結束空白鍵放開處理。
 } // 結束鍵盤放開處理函式。
 
 function windowResized() { // 在瀏覽器視窗大小改變時重新配置畫面。
